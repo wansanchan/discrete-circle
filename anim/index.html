@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>闭合、均匀，然后圆心出现</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #14161c;
+      --ink: #ebe6dc;
+      --muted: #a39c90;
+      --line: #ebe6dc;
+      --gap: #e07a5f;
+      --normal: #8fb9c4;
+      --center: #f0d08a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "PingFang SC", sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 18px;
+      padding: 28px 16px 36px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      font-weight: 560;
+      letter-spacing: 0.04em;
+    }
+    p {
+      margin: 0;
+      max-width: 640px;
+      text-align: center;
+      line-height: 1.55;
+      color: var(--muted);
+      min-height: 3.1em;
+    }
+    canvas {
+      width: min(92vw, 680px);
+      height: min(92vw, 680px);
+      background: #101218;
+      border-radius: 18px;
+      display: block;
+    }
+    button {
+      background: transparent;
+      color: var(--ink);
+      border: 1px solid #3a3e48;
+      border-radius: 999px;
+      padding: 8px 18px;
+      font: inherit;
+      cursor: pointer;
+    }
+    button:hover { border-color: #8d877c; }
+  </style>
+</head>
+<body>
+  <h1>闭合、均匀，然后圆心出现</h1>
+  <p id="caption" aria-live="polite">这些小段各自朝向不同的方向。</p>
+  <canvas id="view" width="680" height="680" aria-label="边矢量收成圆的动画"></canvas>
+  <button id="replay" type="button">再看一次</button>
+  <script src="relax.js"></script>
+  <script>
+    const caption = document.getElementById("caption");
+    const canvas = document.getElementById("view");
+    const ctx = canvas.getContext("2d");
+    const END_N = 22;
+
+    let state = null;
+    let clock = 0;
+    let last = performance.now();
+    let splitClock = 0;
+
+    function reset() {
+      state = CircleRelax.createState();
+      clock = 0;
+      splitClock = 0;
+    }
+
+    const T_SCATTER = 3.4;
+    const T_JOIN = 7.2;
+    const T_EVEN = 12.2;
+
+    function phaseOf(t, n) {
+      if (t < T_SCATTER) return "scatter";
+      if (t < T_JOIN) return "join";
+      if (t < T_EVEN) return "even";
+      if (n < END_N) return "refine";
+      return "circle";
+    }
+
+    function captionOf(phase) {
+      if (phase === "scatter") return "这些小段各自朝向不同的方向。";
+      if (phase === "join") return "先让它们首尾相接。这时还没有共同的圆心。";
+      if (phase === "even") return "长度和转角变均匀之后，法线交到一点，圆心出现。";
+      if (phase === "refine") return "边再密一些，这条边界才看起来是圆。";
+      return "圆心先出现。圆是边变密之后的样子。";
+    }
+
+    function layoutAnchors(n, time) {
+      const anchors = [];
+      for (let k = 0; k < n; k++) {
+        const a = (-Math.PI / 2) + (k / n) * Math.PI * 2;
+        const wobble = 18 * Math.sin(time * 0.7 + k);
+        anchors.push({
+          x: Math.cos(a) * (210 + wobble),
+          y: Math.sin(a) * (210 + wobble)
+        });
+      }
+      return anchors;
+    }
+
+    function drawArrow(x0, y0, x1, y1, color, width) {
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.lineWidth = width;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(x1, y1);
+      ctx.stroke();
+      const ang = Math.atan2(y1 - y0, x1 - x0);
+      const head = 11;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x1 - head * Math.cos(ang - 0.4), y1 - head * Math.sin(ang - 0.4));
+      ctx.lineTo(x1 - head * Math.cos(ang + 0.4), y1 - head * Math.sin(ang + 0.4));
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    function frame(now) {
+      const dt = Math.min(0.032, (now - last) / 1000);
+      last = now;
+      if (!still) {
+        clock += dt;
+      }
+      const phase = phaseOf(clock, state.n);
+      if (!still) {
+        const gain = {
+          close: phase === "scatter" ? 0 : phase === "join" ? 1.6 : 3.2,
+          even: phase === "scatter" || phase === "join" ? 0 : phase === "refine" ? 4.5 : 1.35
+        };
+        const sub = phase === "refine" ? 6 : 1;
+        for (let i = 0; i < sub; i++) CircleRelax.step(state, dt / sub, gain);
+
+        if (phase === "refine") {
+          splitClock += dt;
+          if (splitClock > 0.42 && state.n < END_N) {
+            CircleRelax.splitOneEdge(state);
+            splitClock = 0;
+          }
+        }
+      }
+
+      const g = CircleRelax.geometry(state);
+      const captionText = captionOf(phase);
+      if (caption.textContent !== captionText) caption.textContent = captionText;
+
+      const w = canvas.width;
+      const h = canvas.height;
+      ctx.clearRect(0, 0, w, h);
+      ctx.save();
+      ctx.translate(w / 2, h / 2);
+
+      const scale = fitScale(g, phase);
+      const join = phase === "scatter" ? 0 : phase === "join" ? Math.min(1, (clock - T_SCATTER) / 1.6) : 1;
+      const anchors = layoutAnchors(state.n, clock);
+      const chain = g.pts.map(function (p) {
+        return { x: (p.x - g.cx) * scale, y: (p.y - g.cy) * scale };
+      });
+      const end = {
+        x: (g.end.x - g.cx) * scale,
+        y: (g.end.y - g.cy) * scale
+      };
+
+      if (join < 1) {
+        for (let k = 0; k < state.n; k++) {
+          const ang = state.phi[k];
+          const len = 54 + 28 * (state.L[k] / 1.6);
+          const ax = anchors[k].x;
+          const ay = anchors[k].y;
+          const bx = chain[k].x;
+          const by = chain[k].y;
+          const x = ax * (1 - join) + bx * join;
+          const y = ay * (1 - join) + by * join;
+          const tipX = x + Math.cos(ang) * len;
+          const tipY = y + Math.sin(ang) * len;
+          drawArrow(x, y, tipX, tipY, "rgba(235,230,220,0.92)", 2.2);
+        }
+      } else {
+        ctx.lineWidth = 2.4;
+        ctx.strokeStyle = "rgba(235,230,220,0.95)";
+        ctx.lineJoin = "round";
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        chain.forEach(function (p, i) {
+          if (i === 0) ctx.moveTo(p.x, p.y);
+          else ctx.lineTo(p.x, p.y);
+        });
+        ctx.lineTo(end.x, end.y);
+        ctx.stroke();
+
+        const gap = Math.hypot(end.x - chain[0].x, end.y - chain[0].y);
+        if (gap > 8) {
+          ctx.setLineDash([5, 6]);
+          ctx.strokeStyle = "rgba(224,122,95,0.95)";
+          ctx.beginPath();
+          ctx.moveTo(end.x, end.y);
+          ctx.lineTo(chain[0].x, chain[0].y);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+
+        const showNormals = phase !== "scatter";
+        if (showNormals) {
+          ctx.lineWidth = 1.2;
+          g.normals.forEach(function (normal) {
+            const x0 = (normal.x - g.cx) * scale;
+            const y0 = (normal.y - g.cy) * scale;
+            const dist = Math.hypot(x0, y0) || 1;
+            const frac = 0.22 + 0.74 * Math.max(0, g.align);
+            ctx.strokeStyle = "rgba(143,185,196," + (0.35 + 0.5 * Math.max(0, g.align)).toFixed(3) + ")";
+            ctx.beginPath();
+            ctx.moveTo(x0, y0);
+            ctx.lineTo(x0 + normal.nx * dist * frac, y0 + normal.ny * dist * frac);
+            ctx.stroke();
+          });
+        }
+
+        const centerAlpha = Math.max(0, Math.min(1, (g.align - 0.9) / 0.08));
+        if (centerAlpha > 0.02 && g.gap < state.n * 0.35) {
+          ctx.beginPath();
+          ctx.fillStyle = "rgba(240,208,138," + centerAlpha.toFixed(3) + ")";
+          ctx.arc(0, 0, 5 + 3 * centerAlpha, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        if (phase === "circle" && g.round > 0.9) {
+          let radius = 0;
+          chain.forEach(function (p) { radius += Math.hypot(p.x, p.y); });
+          radius /= chain.length;
+          ctx.beginPath();
+          ctx.lineWidth = 1.4;
+          ctx.strokeStyle = "rgba(240,208,138,0.85)";
+          ctx.arc(0, 0, radius, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+
+        chain.forEach(function (p) {
+          ctx.beginPath();
+          ctx.fillStyle = "#ebe6dc";
+          ctx.arc(p.x, p.y, 3.1, 0, Math.PI * 2);
+          ctx.fill();
+        });
+      }
+
+      ctx.restore();
+      requestAnimationFrame(frame);
+    }
+
+    function fitScale(g, phase) {
+      if (phase === "scatter") return 1;
+      let maxR = 1;
+      g.pts.forEach(function (p) {
+        maxR = Math.max(maxR, Math.hypot(p.x - g.cx, p.y - g.cy));
+      });
+      maxR = Math.max(maxR, Math.hypot(g.end.x - g.cx, g.end.y - g.cy));
+      return 250 / maxR;
+    }
+
+    document.getElementById("replay").addEventListener("click", function () {
+      reset();
+      last = performance.now();
+    });
+
+    const still = new URLSearchParams(location.search).get("still");
+    const stillTime = { scatter: 1.2, lumpy: 6.6, center: 11.4, round: 28 };
+    reset();
+    if (still && stillTime[still] != null) {
+      const target = stillTime[still];
+      const dt = 0.016;
+      while (clock < target) {
+        const phase = phaseOf(clock, state.n);
+        const gain = {
+          close: phase === "scatter" ? 0 : phase === "join" ? 1.6 : 3.2,
+          even: phase === "scatter" || phase === "join" ? 0 : phase === "refine" ? 4.5 : 1.35
+        };
+        CircleRelax.step(state, dt, gain);
+        if (phase === "refine" && state.n < END_N) {
+          splitClock += dt;
+          if (splitClock > 0.42) {
+            CircleRelax.splitOneEdge(state);
+            splitClock = 0;
+          }
+        }
+        clock += dt;
+      }
+      last = performance.now();
+    }
+    requestAnimationFrame(frame);
+  </script>
+</body>
+</html>
